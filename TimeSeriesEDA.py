@@ -13,8 +13,7 @@ import seaborn as sns
 
 '''Part 1: Data Load and cleaning'''
 
-path = 'C://Users//seelc//OneDrive//Desktop//Projects//Masters Acquisition//Capstone//Data for Modeling//'
-airport = pd.read_csv(path + 'large sample, 16M.csv')
+airport = pd.read_csv('large sample, 16M.csv')
 
 print(list(airport.columns))
 '''Part 2: EDA'''
