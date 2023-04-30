@@ -13,6 +13,10 @@ from datetime import timedelta
 
 
 def create_dataset(dataset, look_back=1):
+    '''Helper function that takes a subset of input dataset based on time, and returns subsetted data.
+    Provides the data to enable a time series model to predict future values based on previous 'look_back' time period
+    '''
+    
     dataX, dataY = [], []
     for i in range(len(dataset)-look_back-1):
         a = dataset[i:(i+look_back), 0]
@@ -87,8 +91,11 @@ def train_airport_delay_models(grouped_df, look_back, epochs, start_date):
         except:
             print(str(airport) +" had error in Script")
     return models
-#Reading in dataset
-df = pd.read_csv('C:\\Users\\seelc\\OneDrive\\Desktop\\Projects\\Masters Acquisition\\Capstone\\Data for Modeling\\medium_Sample_Model, 4M.csv',
+
+'''PART1: Performing time series forecasting and adding prediction to dataframe'''
+
+#Reading in dataset and sorting by time
+df = pd.read_csv('large sample, 16M.csv',
                 low_memory=False)
 df.sort_values(by='Time', inplace = True)
 
@@ -140,34 +147,34 @@ tf.random.set_seed(7)
 dataset = for_train_total.percent_delay.to_numpy().reshape(-1, 1)
 dataset = dataset.astype('float32')
 
-# normalize the dataset
+#Normalizing Dataset
 scaler = MinMaxScaler()
 scaler.fit(dataset)
 dataset = scaler.transform(dataset)
 
-# split into train and test sets
+#Split into train and test sets
 train_size = int(len(dataset) * 0.67)
 test_size = len(dataset) - train_size
 train, test = dataset[0:train_size,:], dataset[train_size:len(dataset),:]
 
-# reshape into X=t and Y=t+1
+#Reshape into X=t and Y=t+1
 look_back = 1
 trainX, trainY = create_dataset(train, look_back)
 testX, testY = create_dataset(test, look_back)
 
-# reshape input to be [samples, time steps, features]
+#Reshaping input to be [samples, time steps, features]
 trainX = np.reshape(trainX, (trainX.shape[0], 1, trainX.shape[1]))
 testX = np.reshape(testX, (testX.shape[0], 1, testX.shape[1]))
 
 
-# create and fit the LSTM network
+#Creating and fit the LSTM network
 model = Sequential()
 model.add(layers.LSTM(4, input_shape=(1, look_back)))
 model.add(layers.Dense(1))
 model.compile(loss='mean_squared_error', optimizer='adam')
 model.fit(trainX, trainY, epochs=100, batch_size=1, verbose=2)
 
-# make predictions
+##Making Predictions
 trainPredict = model.predict(trainX)
 testPredict = model.predict(testX)
 
@@ -177,7 +184,7 @@ print('Train Score: %.2f RMSE' % (trainScore))
 testScore = np.sqrt(mean_squared_error(testY, testPredict[:,0]))
 print('Test Score: %.2f RMSE' % (testScore))
 
-# Shifting data and plotting
+#Shifting data and plotting
 trainPredictPlot = np.empty_like(dataset)
 trainPredictPlot[:, :] = np.nan
 trainPredictPlot[look_back:len(trainPredict)+look_back, :] = trainPredict
@@ -202,12 +209,45 @@ for i in list(models.keys()):
     else:
         total_predictions = pd.concat([total_predictions, models[i]['prediction_df']])
     count += 1
-
-total_predictions['key'] = str(total_predictions['date']) + str(total_predictions['airport'])
+    
+#Adding airport/time key for use in joining prediction back to main dataframe
+total_predictions['key'] = total_predictions['date'].astype(str) + total_predictions['airport'].astype(str)
 
 #Adding predictions to dataframe
-df['key'] = str(df['Time'])+ str(df['OriginAirportID']) 
-out_df = df.join(total_predictions, how='left', lsuffix='key', rsuffix='key')
+df['key'] = df['Time'].astype(str)+ df['OriginAirportID'].astype(str)
+out_df = pd.merge(df, total_predictions, how = 'left', on = 'key')
+out_df.head(10)
 
-#Outputting dataframe
-out_df.to_csv('Medium Sample, df 4M.csv')
+'''PART2:Performing day/airport level capacity calculations and adding results to dataframe'''
+#Aggregating planes by day and departure airport
+airport_utilization = out_df[['Time','OriginAirportID']].groupby(by = ['Time','OriginAirportID'] ).size().reset_index(name='counts')
+airport_utilization = airport_utilization.reset_index().drop(columns = ['index'])
+header_row = ['Time','OriginAirportID', 'Plane_Count']
+util2 = pd.DataFrame(airport_utilization.values[1:], columns = header_row)
+
+#Calculating Max airplanes per airport
+max_planes = util2[['OriginAirportID', 'Plane_Count']].groupby(by = ['OriginAirportID']).agg({'Plane_Count':['max']}).reset_index()
+header_row_2 = ['OriginAirportID', 'Max_Plane_Count']
+max_planes_2 = pd.DataFrame(max_planes.values[1:], columns = header_row_2)
+
+#Examining data
+max_planes_2.head(10)
+
+#Converting keys to strings
+max_planes_2['OriginAirportID'] = max_planes_2['OriginAirportID'].astype(str)
+util2['OriginAirportID'] = util2['OriginAirportID'].astype(str)
+
+#Joining two dataframes together to add max_planes variable to daily capacity dataset
+joined_planes = pd.merge(util2, max_planes_2, how = 'left', on = 'OriginAirportID')
+joined_planes['Percentage_Capacity'] = joined_planes['Plane_Count']/joined_planes['Max_Plane_Count']
+
+# Now Joining back to the main dataset
+out_df['Capacity_key'] = out_df['Time'].astype(str) + out_df['OriginAirportID'].astype(str)
+joined_planes['Capacity_key'] = joined_planes['Time'].astype(str) + joined_planes['OriginAirportID'].astype(str)
+out_df = pd.merge(out_df, joined_planes, how = 'inner', on = 'Capacity_key')
+
+#Now dropping key
+out_df = out_df.drop(columns = ['Capacity_key'])
+
+#Finally Outputting dataframe for use in modeling script
+out_df.to_csv('large sample, df 16M, with forecast.csv')
