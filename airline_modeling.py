@@ -356,7 +356,7 @@ if __name__ == '__main__':
     
     #Fits the explainer
     explainer = shap.Explainer(best_model.predict, X_test.iloc[50:150,:])
-    #Calculates the SHAP values - It takes some time
+    #Calculates the SHAP values
     shap_values = explainer(X_test.iloc[50:100,:])
 
     #plotting values
@@ -369,6 +369,10 @@ if __name__ == '__main__':
     to_drop = ['ArrDelayMinutes', 'ArrivalDelayGroups', 'ArrTime']
     X_train2 = X_train.drop(columns = to_drop)
     X_test2 = X_test.drop(columns = to_drop)
+        
+    #Creating subset for hyperparameter tuning
+    x_train2_small = X_train2.iloc[:100000, :]
+    x_test2_small = X_test2.iloc[:100000, :]
     
     #Re-Fitting Regressor and tree models without arrival information
     regressor_model_24h, regressor_accuracy_24h = fit_regressor(X_train2, y_train, X_test2, y_test)
@@ -378,12 +382,33 @@ if __name__ == '__main__':
     sklearn_feature_importance(tree_model_24h, regressor_model_24h)
     
     #Training neural network
-    nn_model_24h = train_neural_network(X_train2, hidden_layers = 2)
+    models_long = [create_baseline_small(x_train2_small), create_baseline_medium(x_train2_small), create_baseline_large(x_train2_small)]
+    names = ['Small', 'Medium', 'Large']
+    accuracy_long = []
+    histories_long = {}
+
+    #Training models on a subset of data
+    for i in range(len(models_long)):
+        history_long = models_long[i].fit(x_train2_small, y_train_small, epochs = 25, verbose = 1,
+                    validation_data = (x_test2_small, y_test_small))
+        accuracy_long.append(models_long[i].evaluate(x_test2_small, y_test_small))
     
+        histories_long[i] = {'Results' :pd.DataFrame(history_long.history),
+                    'Model' : history_long}
+        
+    #Visualizing neural network training
+    visualize_f1(histories_long)
+    
+    #Returning best model trained on all data
+    best_model_long_index = select_best_model_f1(histories_long)
+    best_model_long = models_long[best_model_long_index]
+    best_model_long.fit(X_train2, y_train, epochs = 25, verbose = 1,
+                            validation_data = (X_test2, y_test))
+        
     #Making predictions with all models and putting into dictionary
     reg_predictions_24h = np.round(regressor_model_24h.predict(X_test2),0)
     tree_predictions_24h = np.round(tree_model_24h.predict(X_test2),0)
-    nn_predictions_24h = np.round(nn_model_24h.predict(X_test2),0).astype(int)
+    nn_predictions_24h = np.round(best_model_long.predict(X_test2),0).astype(int)
     cf_matrix = {'Logistic Classifier': confusion_matrix(y_test, reg_predictions_24h, normalize = 'all') ,
                 "RandomForest Clasifier": confusion_matrix(y_test, tree_predictions_24h ,normalize = 'all'),
                 'Neural Network':  confusion_matrix(y_test, nn_predictions_24h, normalize = 'all')}
@@ -391,10 +416,26 @@ if __name__ == '__main__':
     #Generating confusion matrice's for all models predictions
     confusion_matrices(cf_matrix)
     
-    #Visualizing feature importance
+    #Visualizing feature importance of logistic regression and random forest models, 24h scenario
     sklearn_feature_importance(tree_model, regressor_model)
     neural_network_feature_importance(nn_model, X_test)
+        
+    # Calculalting F1 Scores 24 hours in advance
+    reg_24_hour_f1 = f1_score(y_test, reg_prediction_24h, zero_division=1)
+    tree_24_hour_f1 = f1_score(y_test_small, tree_prediction_24h, zero_division=1)
+    print("Logistic Regressor F1: ", reg_24_hour_f1)
+    print("RF classifier F1: ", tree_24_hour_f1)
     
+    #Visualing feature importance of neural network
+    #Fits the explainer
+    explainer = shap.Explainer(best_model_long.predict, X_test2.iloc[50:150,:])
+    #Calculates the SHAP values
+    shap_values = explainer(X_test2.iloc[50:150,:])
+
+    #plotting values
+    shap.plots.bar(shap_values)
+    #Violin plot
+    shap.summary_plot(shap_values)
     
     
     
