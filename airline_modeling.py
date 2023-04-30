@@ -60,6 +60,9 @@ def drop_cols(df):
         
 def encode_dummies(df_sample):
         
+    '''Performs one hot encoding on input dataframe to encode n level categorical variables
+    as n binary ones. Returns encoded dataframe'''
+
     #One Hot Encoding State name
     state_encode = pd.get_dummies(df_sample.OriginStateName, prefix='State')
         
@@ -72,6 +75,9 @@ def encode_dummies(df_sample):
     
 def normalize_df( numeric_df):
         
+    '''Takes numeric_dataframe as input, calculates the skewness of each variable, and normalizes any
+    variables with a skewness score of >0.5, returns normalized dataframe''' 
+
     col_list = []
     for i in numeric_df.columns:
         if i.find('State')!=0:
@@ -175,19 +181,37 @@ def fit_tree(X_train, y_train, X_test, y_test):
     return best_rf, tree_accuracy
 
 
-def train_neural_network(input_df, hidden_layers = 2):
-
+def create_baseline_small(input_df):
     input_features = input_df.shape[1]
     model = Sequential()
     model.add(Dense(input_features, input_shape=(input_features,), activation='relu'))
-    for layer in len(range(hidden_layers)):
-        
-        model.add(Dropout(.2, input_shape=(input_features,))) #Dropout layer to avoid overfitting
-        model.add(Dense(input_features, input_shape=(input_features*layer,), activation='relu')) #Triangular structure
-        model.add(Dropout(.2, input_shape=(input_features,))) #Dropout layer to avoid overfitting
-    #Adding Output Layer
+    model.add(Dropout(.2, input_shape=(input_features,))) #Dropout layer to avoid overfitting
     model.add(Dense(1, activation='sigmoid'))
-    
+    # Compile model
+    model.compile(loss='binary_crossentropy', optimizer='adam', 
+                  metrics= [tfa.metrics.F1Score(num_classes = 2, threshold = 0.5, average="micro")])
+    return model
+
+def create_baseline_medium(input_df):
+    input_features = input_df.shape[1]
+    model = Sequential()
+    model.add(Dense(input_features, input_shape=(input_features,), activation='relu'))
+    model.add(Dropout(.2, input_shape=(input_features,))) #Dropout layer to avoid overfitting
+    model.add(Dense(input_features, input_shape=(input_features*2,), activation='relu')) #Second layer
+    model.add(Dense(1, activation='sigmoid'))
+    # Compile model
+    model.compile(loss='binary_crossentropy', optimizer='adam', 
+                  metrics=[tfa.metrics.F1Score(num_classes = 2, threshold = 0.5, average="micro")])
+    return model
+
+def create_baseline_large(input_df):
+    input_features = input_df.shape[1]
+    model = Sequential()
+    model.add(Dense(input_features, input_shape=(input_features,), activation='relu'))
+    model.add(Dropout(.2, input_shape=(input_features,))) #Dropout layer to avoid overfitting
+    model.add(Dense(input_features, input_shape=(input_features*2,), activation='relu')) #Second layer
+    model.add(Dense(input_features, input_shape=(input_features,), activation='relu'))  #third layer
+    model.add(Dense(1, activation='sigmoid'))
     # Compile model
     model.compile(loss='binary_crossentropy', optimizer='adam', 
                   metrics=[tfa.metrics.F1Score(num_classes = 2, threshold = 0.5, average="micro")])
@@ -240,10 +264,10 @@ def neural_network_feature_importance(best_model, X_test):
     #Violin plot
     shap.summary_plot(shap_values)
     
-if __name__ == 'main':
+if __name__ == '__main__':
     
     #Load dataframe, sort by time, remove columns
-    df = pd.read_csv('C:\\Users\\seelc\\OneDrive\\Desktop\\Projects\\Masters Acquisition\\Capstone\\Data for Modeling\\Medium Sample, df 4M.csv')
+    df = pd.read_csv('large sample, df 16M, with forecast.csv')
     df.sort_values(by='Time', inplace = True)
     df = drop_cols(df)
     
@@ -267,13 +291,50 @@ if __name__ == 'main':
     #Graphing feature importance for random forest and logistic regression
     sklearn_feature_importance(tree_model, regressor_model)
     
-    #Training neural network
-    nn_model = train_neural_network(X_train, hidden_layers = 2)
-    
+    #Training neural network on subset of data to identify best later/node count
+    #Performing preprocessing
+    scaler = preprocessing.StandardScaler().fit(X_train, X_test)
+    cols = X_train.columns
+    X_train = pd.DataFrame(scaler.transform(X_train), columns = cols)
+    X_test = pd.DataFrame(scaler.transform(X_test), columns = cols)
+
+
+    x_train_small = X_train.iloc[:100000, :]
+    y_train_small = y_train.iloc[:100000]
+    x_test_small = X_test.iloc[:100000, :]
+    y_test_small = y_test.iloc[:100000]
+
+    #Creating models for Training
+    models = [create_baseline_small(x_train_small), create_baseline_medium(x_train_small), create_baseline_medium(x_train_small)]
+    names = ['Small', 'Medium', 'Large']
+    accuracy = []
+    histories = {}
+
+    #Training models
+    for i in range(len(models)):
+        history = models[i].fit(x_train_small, y_train_small, epochs = 25,verbose= 1,
+                            validation_data = (x_test_small, y_test_small))
+        accuracy.append(models[i].evaluate(x_test_small, y_test_small))
+
+        histories[i] = {'Results' :pd.DataFrame(history.history),
+                            'Model' : history,
+                            'End Score': history.history['val_f1_score'][-1]}
+        
+    #Viualizing training histories
+    visualize_f1(histories)
+        
+    #Returning best model and training on entire dataset
+    best_model_index = select_best_model_f1(histories)
+    best_model = models[best_model_index]
+    best_model.fit(X_train, y_train, epochs = 25, verbose = 1,
+                            validation_data = (X_test, y_test))
+    #Returning model summary   
+    best_model.summary()
+        
     #Making predictions with all models and putting into dictionary
     reg_predictions = np.round(regressor_model.predict(X_test),0)
     tree_predictions = np.round(tree_model.predict(X_test),0)
-    nn_predictions = np.round(nn_model.predict(X_test),0).astype(int)
+    nn_predictions = np.round(best_model.predict(X_test),0).astype(int)
     cf_matrix = {'Logistic Classifier': confusion_matrix(y_test, reg_predictions, normalize = 'all') ,
                 "RandomForest Clasifier": confusion_matrix(y_test, tree_predictions,normalize = 'all'),
                 'Neural Network': confusion_matrix(y_test, nn_predictions, normalize = 'all')}
@@ -281,10 +342,27 @@ if __name__ == 'main':
     #Generating confusion matrice's for all models predictions
     confusion_matrices(cf_matrix)
     
-    #Visualizing feature importance
+    #Visualizing feature importance for random forest and logistic regression models
     sklearn_feature_importance(tree_model, regressor_model)
     neural_network_feature_importance(nn_model, X_test)
     
+    #Using shap library to visualize variable importance for neural networks
+    explainer = shap.KernelExplainer(best_model, X_train.iloc[:50,:])
+    shap_values = explainer.shap_values(X_train.iloc[20,:], nsamples=500)
+    shap.force_plot(explainer.expected_value, shap_values[0], X_train.iloc[20,:])
+
+    shap_values50 = explainer.shap_values(X_train.iloc[50:100,:], nsamples=500)
+    shap.force_plot(explainer.expected_value, shap_values50[0], X_train.iloc[50:100,:])
+    
+    #Fits the explainer
+    explainer = shap.Explainer(best_model.predict, X_test.iloc[50:150,:])
+    #Calculates the SHAP values - It takes some time
+    shap_values = explainer(X_test.iloc[50:100,:])
+
+    #plotting values
+    shap.plots.bar(shap_values)
+    #Violin plot
+    shap.summary_plot(shap_values)
     
     '''Scenario 2: Dropping arrival information and retraining for 24 hour scenario'''
     #Dropping arrival variables
