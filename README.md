@@ -1,7 +1,7 @@
 # DS785-Capstone
 Repository containing code for a Masters Thesis analyzing causes of airline delays
 
-# Code Description:
+# Primary Scripts: Ran in this Order
 1. Data pre-processing: 
 * Joins and cleans airline and weather datasets
 * Drops unnescessary and redundant variables
@@ -15,3 +15,6 @@ Repository containing code for a Masters Thesis analyzing causes of airline dela
 * Trains models in 2-hour and 24-hour prediction scenarios
 * Assesses feature importance of each model in each scenario
 * Visualizes model training and feature importance for use in presentation
+
+# Secondary Scripts: For generating some of the visualizations in the project
+1. Time Series EDA: Produces time series visuals showing on time flight performance over a number of time measures(week, month, etc.)
